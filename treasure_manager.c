@@ -13,7 +13,7 @@
 #define TREASURE_FILE "treasures.dat"
 #define LOG_FILE "logged_hunt"
 
-// Define fixed-size treasure structure
+// define fixed-size treasure structure
 typedef struct {
     char id[16];
     char username[MAX_USERNAME];
@@ -40,15 +40,38 @@ void log_action(const char *hunt_dir, const char *action) {
     symlink(path, linkname); // ignore errors for now
 }
 
+//helper functions:
+int read_float(const char *prompt, float *out) {
+    char buffer[128];
+    printf("%s", prompt);
+    if (!fgets(buffer, sizeof(buffer), stdin)) return 0;
+    return sscanf(buffer, "%f", out) == 1;
+}
+
+int read_int(const char *prompt, int *out) {
+    char buffer[128];
+    printf("%s", prompt);
+    if (!fgets(buffer, sizeof(buffer), stdin)) return 0;
+    return sscanf(buffer, "%d", out) == 1;
+}
+
+void read_string(const char *prompt, char *out, size_t max_len) {
+    printf("%s", prompt);
+    if (fgets(out, max_len, stdin)) {
+        out[strcspn(out, "\n")] = 0; // remove newline
+    }
+}
+
+
 void add_treasure(const char *hunt_id) {
     char dir_path[256];
     snprintf(dir_path, sizeof(dir_path), "%s", hunt_id);
     mkdir(dir_path, 0755);
 
-    char file_path[256];
+    char file_path[512]; // fixed warning
     snprintf(file_path, sizeof(file_path), "%s/%s", dir_path, TREASURE_FILE);
 
-    // Determine next available ID
+    // determine next available ID
     int fd = open(file_path, O_RDONLY);
     int next_id = 1;
     Treasure temp;
@@ -66,21 +89,27 @@ void add_treasure(const char *hunt_id) {
         return;
     }
 
+    // implemented data validation
     Treasure t;
     snprintf(t.id, sizeof(t.id), "%d", next_id);
     printf("Generated Treasure ID: %s\n", t.id);
-    printf("Enter Username: ");
-    scanf("%31s", t.username);
-    printf("Enter Latitude: ");
-    scanf("%f", &t.latitude);
-    printf("Enter Longitude: ");
-    scanf("%f", &t.longitude);
-    getchar();  // consume newline
-    printf("Enter Clue: ");
-    fgets(t.clue, MAX_CLUE, stdin);
-    t.clue[strcspn(t.clue, "\n")] = 0; // remove newline
-    printf("Enter Value: ");
-    scanf("%d", &t.value);
+
+    read_string("Enter Username: ", t.username, MAX_USERNAME);
+
+    while (!read_float("Enter Latitude: ", &t.latitude)) {
+        printf("Invalid input. Please enter a valid floating point number.\n");
+    }
+
+    while (!read_float("Enter Longitude: ", &t.longitude)) {
+        printf("Invalid input. Please enter a valid floating point number.\n");
+    }
+
+    read_string("Enter Clue: ", t.clue, MAX_CLUE);
+
+    while (!read_int("Enter Value: ", &t.value)) {
+        printf("Invalid input. Please enter a valid integer.\n");
+    }
+
 
     write(fd, &t, sizeof(Treasure));
     close(fd);
@@ -153,7 +182,7 @@ void view_treasure(const char *hunt_id, const char *treasure_id) {
 }
 
 void remove_treasure(const char *hunt_id, const char *treasure_id) {
-    char file_path[256];
+    char file_path[512];
     snprintf(file_path, sizeof(file_path), "%s/%s", hunt_id, TREASURE_FILE);
 
     int fd = open(file_path, O_RDONLY);
@@ -162,59 +191,73 @@ void remove_treasure(const char *hunt_id, const char *treasure_id) {
         return;
     }
 
-    Treasure *list = NULL;
-    int count = 0;
+    // Read all treasures
+    Treasure *all_treasures = NULL;
+    int total = 0;
     Treasure t;
     while (read(fd, &t, sizeof(Treasure)) == sizeof(Treasure)) {
-        Treasure *new_list = realloc(list, (count + 1) * sizeof(Treasure));
-        if (!new_list) {
+        Treasure *new_block = realloc(all_treasures, (total + 1) * sizeof(Treasure));
+        if (!new_block) {
             perror("realloc");
-            free(list);
+            free(all_treasures);
             close(fd);
             return;
         }
-        list = new_list;
-        list[count++] = t;
+        all_treasures = new_block;
+        all_treasures[total++] = t;
     }
     close(fd);
 
-    int removed = 0;
-    for (int i = 0; i < count; ++i) {
-        if (strcmp(list[i].id, treasure_id) == 0) {
-            for (int j = i; j < count - 1; ++j) {
-                list[j] = list[j + 1];
-            }
-            removed = 1;
-            count--;
-            break;
+    // Filter treasures (remove the one with matching ID)
+    Treasure *filtered = malloc(total * sizeof(Treasure));
+    if (!filtered) {
+        perror("malloc");
+        free(all_treasures);
+        return;
+    }
+
+    int found = 0, new_count = 0;
+    for (int i = 0; i < total; ++i) {
+        if (strcmp(all_treasures[i].id, treasure_id) == 0) {
+            found = 1; // Found the one to remove
+        } else {
+            filtered[new_count++] = all_treasures[i];
         }
     }
 
-    if (!removed) {
+    free(all_treasures);
+
+    if (!found) {
         printf("Treasure ID %s not found.\n", treasure_id);
-        free(list);
+        free(filtered);
         return;
     }
 
+    // Rewrite file with remaining treasures (this part i think does not exactly work properly)
     fd = open(file_path, O_WRONLY | O_TRUNC);
     if (fd < 0) {
         perror("open write");
-        free(list);
+        free(filtered);
         return;
     }
 
-    if (count > 0) {
-        write(fd, list, count * sizeof(Treasure));
+    if (new_count > 0) {
+        if (write(fd, filtered, new_count * sizeof(Treasure)) != new_count * sizeof(Treasure)) {
+            perror("write");
+        }
     }
-    close(fd);
-    free(list);
 
+    close(fd);
+    free(filtered);
+
+    // Log the removal
     char log_msg[256];
     snprintf(log_msg, sizeof(log_msg), "Removed treasure %s from hunt %s", treasure_id, hunt_id);
     log_action(hunt_id, log_msg);
 
     printf("Treasure removed.\n");
 }
+
 
 void remove_hunt(const char *hunt_id) {
     char file_path[256], log_path[256];
@@ -232,7 +275,7 @@ void remove_hunt(const char *hunt_id) {
 
     char log_msg[256];
     snprintf(log_msg, sizeof(log_msg), "Removed hunt %s", hunt_id);
-    log_action(".", log_msg);
+    //log_action(".", log_msg); //no longer logs deletion 
 
     printf("Hunt removed.\n");
 }

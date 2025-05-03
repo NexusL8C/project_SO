@@ -242,7 +242,7 @@ void remove_treasure(const char *hunt_id, const char *treasure_id) {
     }
 
     if (new_count > 0) {
-        if (write(fd, filtered, new_count * sizeof(Treasure)) != new_count * sizeof(Treasure)) {
+        if (write(fd, filtered, new_count * sizeof(Treasure)) != (ssize_t)(new_count * sizeof(Treasure))) {
             perror("write");
         }
     }
@@ -274,7 +274,7 @@ void remove_hunt(const char *hunt_id) {
     rmdir(hunt_id);
 
     char log_msg[256];
-    snprintf(log_msg, sizeof(log_msg), "Removed hunt %s", hunt_id);
+    snprintf(log_msg, sizeof(log_msg), "Removed hunt %s", hunt_id); 
     //log_action(".", log_msg); //no longer logs deletion 
 
     printf("Hunt removed.\n");

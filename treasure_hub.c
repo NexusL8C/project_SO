@@ -70,10 +70,9 @@ void process_command(const char *cmd) {
                 char full_path[512];
                 snprintf(full_path, sizeof(full_path), "%s/%s", HUNTS_DIR, entry->d_name);
                 struct stat st;
-                if (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode) && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0){
+                if (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode) && strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
                     char path[512];
                     snprintf(path, sizeof(path), "%s/%s/%s", HUNTS_DIR, entry->d_name, TREASURE_FILE);
-                    struct stat st;
                     int count = 0;
                     if (stat(path, &st) == 0) {
                         count = st.st_size / RECORD_SIZE;
@@ -87,9 +86,7 @@ void process_command(const char *cmd) {
             char hunt_id[128];
             if (sscanf(cmd, "list_treasures %127s", hunt_id) == 1) {
                 char path[256];
-                snprintf(path, sizeof(path), "%s/%s", HUNTS_DIR"/", hunt_id);
-                char file[512];
-                snprintf(file, sizeof(file), "%s/%s", path, TREASURE_FILE);
+                snprintf(path, sizeof(path), "%s/%s", HUNTS_DIR, hunt_id);
                 execlp("./treasure_manager", "treasure_manager", "--list", path, NULL);
                 perror("execlp list_treasures");
             }
@@ -155,13 +152,9 @@ int main() {
                 else if (monitor_pid == 0) simulate_monitor_loop();
                 else printf("[Hub] Started monitor with PID %d\n", monitor_pid);
             }
-        } else if (strncmp(line, "list_hunts", strlen("list_hunts")) == 0) {
-            if (monitor_pid < 0) printf("[Hub] Monitor not running. Use 'start_monitor'.\n");
-            else { write_command(line); kill(monitor_pid, SIGUSR1); }
-        } else if (strncmp(line, "list_treasures", strlen("list_treasures")) == 0) {
-            if (monitor_pid < 0) printf("[Hub] Monitor not running. Use 'start_monitor'.\n");
-            else { write_command(line); kill(monitor_pid, SIGUSR1); }
-        } else if (strncmp(line, "view_treasure", strlen("view_treasure")) == 0) {
+        } else if (strncmp(line, "list_hunts", strlen("list_hunts")) == 0 ||
+                   strncmp(line, "list_treasures", strlen("list_treasures")) == 0 ||
+                   strncmp(line, "view_treasure", strlen("view_treasure")) == 0) {
             if (monitor_pid < 0) printf("[Hub] Monitor not running. Use 'start_monitor'.\n");
             else { write_command(line); kill(monitor_pid, SIGUSR1); }
         } else if (strncmp(line, "stop_monitor", strlen("stop_monitor")) == 0) {
@@ -174,15 +167,63 @@ int main() {
                 printf("[Hub] Monitor exited with status %d\n", WEXITSTATUS(status));
                 monitor_pid = -1;
             }
+        } else if (strncmp(line, "calculate_score", strlen("calculate_score")) == 0) {
+            DIR *dir = opendir(HUNTS_DIR);
+            if (!dir) {
+                perror("[Hub] opendir hunts");
+            } else {
+                struct dirent *entry;
+                while ((entry = readdir(dir)) != NULL) {
+                    char full_path[512];
+                    snprintf(full_path, sizeof(full_path), "%s/%s", HUNTS_DIR, entry->d_name);
+                    struct stat st;
+                    if (stat(full_path, &st) == 0 && S_ISDIR(st.st_mode) &&
+                        strcmp(entry->d_name, ".") != 0 &&
+                        strcmp(entry->d_name, "..") != 0) {
+                        int pipefd[2];
+                        if (pipe(pipefd) == -1) {
+                            perror("pipe");
+                            continue;
+                        }
+
+                        pid_t pid = fork();
+                        if (pid == 0) {
+                            close(pipefd[0]);
+                            dup2(pipefd[1], STDOUT_FILENO);
+                            close(pipefd[1]);
+
+                            char path[512];
+                            snprintf(path, sizeof(path), "%s/%s", HUNTS_DIR, entry->d_name);
+                            execlp("./score_calculator", "score_calculator", path, NULL);
+                            perror("execlp");
+                            exit(1);
+                        } else if (pid > 0) {
+                            close(pipefd[1]);
+                            char buffer[256];
+                            ssize_t n;
+
+                            printf("Scores for hunt '%s':\n", entry->d_name);
+                            while ((n = read(pipefd[0], buffer, sizeof(buffer) - 1)) > 0) {
+                                buffer[n] = '\0';
+                                printf("%s", buffer);
+                            }
+
+                            close(pipefd[0]);
+                            waitpid(pid, NULL, 0);
+                        } else {
+                            perror("fork");
+                        }
+                    }
+                }
+                closedir(dir);
+            }
         } else if (strncmp(line, "exit", strlen("exit")) == 0) {
             if (monitor_pid > 0) printf("[Hub] Monitor still running. Use 'stop_monitor' first.\n");
             else break;
         } else {
             printf("[Hub] Unknown command: %s\n", line);
         }
-        printf("hub> "); //nice print formatting does not really work properly
+        printf("hub> ");
     }
     return 0;
 }
-
-//as of currently, treasures have to be manually inserted into the hunts directory via an hunts/ before treasure name
